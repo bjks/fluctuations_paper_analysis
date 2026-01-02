@@ -1,0 +1,732 @@
+
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+import matplotlib as mpl
+from scipy import stats
+
+import os
+
+
+np.random.seed(1)
+
+class Raw_cell:
+    def __init__(self, cell_id = 0, parent_id=-1):
+        self.parent_id = parent_id
+        self.cell_id = cell_id
+        self.length = []
+        self.gfp = []
+        self.time = []
+
+def df2raw_cells(dataset, 
+            time="time", 
+            length="length", gfp="fp", 
+            cell_id="cell_id", 
+            parent_id="parent_id"):
+    """ 
+    dataset (pandas data frame as read from csv file)
+    """
+    cell_list = []
+    last_cell = ""
+    for _, row in dataset.iterrows(): 
+        if row[cell_id] != last_cell:
+            if parent_id==None:
+                new_cell = Raw_cell(cell_id=row[cell_id], parent_id=None)
+            else:
+                new_cell = Raw_cell(cell_id=row[cell_id], parent_id=row[parent_id])
+            cell_list.append(new_cell)
+
+        cell_list[-1].length.append(row[length])
+        cell_list[-1].gfp.append(row[gfp])
+        cell_list[-1].time.append(row[time])
+
+        last_cell = row[cell_id]
+    return cell_list
+
+
+
+class GGP_cell:
+    def __init__(self, cell_id = 0, parent_id=-1):
+        self.parent_id = parent_id
+        self.cell_id = cell_id
+        self.log_length = []
+        self.gfp = np.array([])
+        self.time = np.array([])
+
+        self.mean_x = np.array([])
+        self.mean_g = np.array([])
+        self.mean_l = np.array([])
+        self.mean_q = np.array([])
+
+        self.cov_xx = np.array([])
+        self.cov_gg = np.array([])
+        self.cov_ll = np.array([])
+        self.cov_qq = np.array([])
+        
+        self.cov_lq = np.array([])
+
+    def to_df(self, n=1, start=0):
+        df = pd.DataFrame({   "cell_id": ([self.cell_id]*len(self.time))[start::n],
+                                "time_min": self.time[start::n],
+                                "parent_id": ([self.parent_id]*len(self.time))[start::n],
+                                "log_length": self.log_length[start::n], 
+                                "gfp": self.gfp[start::n]
+                                })
+        return df
+
+
+def df2ggp_cells(dataset, 
+            time="time", 
+            log_length="log_length", gfp="fp", 
+            mean_x="mean_x", mean_g="mean_g", 
+            mean_l="mean_l", mean_q="mean_q",
+            cov_xx="cov_xx",
+            cov_gg="cov_gg",
+            cov_ll="cov_ll",
+            cov_qq="cov_qq",
+            cov_lq="cov_lq",
+            cell_id="cell_id", 
+            parent_id="parent_id"):
+    """ 
+    dataset (pandas data frame as read from csv file) to list of GGP_cell instances, m
+    written for ggp output
+    """
+    cell_list = []
+    last_cell = ""
+    for _, row in dataset.iterrows(): 
+        if row[cell_id] != last_cell:
+            new_cell = GGP_cell(
+                        cell_id=row[cell_id], 
+                        parent_id=row[parent_id])
+            cell_list.append(new_cell)
+
+        cell_list[-1].log_length = np.append(cell_list[-1].log_length , row[log_length])
+        cell_list[-1].gfp = np.append(cell_list[-1].gfp , row[gfp])
+        cell_list[-1].time = np.append(cell_list[-1].time, row[time])
+
+        cell_list[-1].mean_x = np.append(cell_list[-1].mean_x, row[mean_x])
+        cell_list[-1].mean_g = np.append(cell_list[-1].mean_g, row[mean_g])
+        cell_list[-1].mean_l = np.append(cell_list[-1].mean_l, row[mean_l])
+        cell_list[-1].mean_q = np.append(cell_list[-1].mean_q, row[mean_q])
+
+        cell_list[-1].cov_xx = np.append(cell_list[-1].cov_xx, row[cov_xx])
+        cell_list[-1].cov_gg = np.append(cell_list[-1].cov_gg, row[cov_gg])
+        cell_list[-1].cov_ll = np.append(cell_list[-1].cov_ll, row[cov_ll])
+        cell_list[-1].cov_qq = np.append(cell_list[-1].cov_qq, row[cov_qq])
+        
+        cell_list[-1].cov_lq = np.append(cell_list[-1].cov_lq, row[cov_lq])
+        
+        last_cell = row[cell_id]
+    return cell_list
+
+                              
+
+# ============== get file names ============== #
+
+# directory: directory in which the input file is
+# sample: filename of the input file
+
+# File base: example_dir/example_sample/example_sample
+def default_filebase(directory, sample, ext="_out"):
+    return os.path.join(directory, sample+ext, sample) 
+
+def get_filebase(directory, sample, out):
+    if out == None:
+        return os.path.join(directory, sample + "_out", sample)
+    return os.path.join(directory, out, sample)
+
+
+def header_lines(filename, until="cell_id"):
+    with open(filename,'r') as fin:
+        for i, line in enumerate(fin):
+            if line.startswith(until):
+                return i
+    return None
+
+# Files
+def get_param_code(paramter_settings):
+    param_code = '_f'
+    for i,k in enumerate(paramter_settings.keys()):
+        if paramter_settings[k]=='free':
+            param_code+=str(i)
+
+    param_code += "_b"
+    for i,k in enumerate(paramter_settings.keys()):
+        if paramter_settings[k]=='bound':
+            param_code+=str(i)
+    return param_code
+
+
+def get_data_file(directory, sample):
+    return os.path.join(directory, sample) + '.csv' 
+
+
+def get_minimization_file(filebase, paramter_settings):
+    minimization_iter_file = filebase + get_param_code(paramter_settings) + "_iterations.csv"
+    minimization_final_file = filebase + get_param_code(paramter_settings) + "_final.csv"
+    return minimization_iter_file, minimization_final_file
+
+
+def get_prediction_files(filebase, paramter_settings=None):
+    if paramter_settings==None:
+        return (filebase + '_prediction_forward.csv',
+            filebase + '_prediction_backward.csv',
+            filebase + '_prediction.csv')
+
+    param_code = ''
+    for p in paramter_settings:
+        param_code += get_param_code(p) 
+    return (filebase + param_code + '_prediction_forward.csv',
+            filebase + param_code + '_prediction_backward.csv',
+            filebase + param_code + '_prediction.csv')
+
+
+def get_scan_files(filebase, paramter_settings):
+    base = filebase + "_scan_"
+    files = []
+    for _,k in enumerate(paramter_settings.keys()):
+        temp = base + k + ".csv"
+        if os.path.isfile(temp):
+            files.append(temp)
+    return files
+
+
+def get_all_filenames(filebase, paramter_settings):
+    minimization_iter_file, minimization_final_file = get_minimization_file(filebase, paramter_settings)
+    scans = get_scan_files(filebase, paramter_settings)
+    f, b, p = get_prediction_files(filebase, [paramter_settings])
+    return {"iter": minimization_iter_file, 
+            "final": minimization_final_file,
+            "scans": scans,
+            "prediction": p,
+            "backward": b,
+            "forward": f}
+
+def fixed_params():
+    return {'mean_lambda': 'fixed',
+            'gamma_lambda': 'fixed',
+            'var_lambda': 'fixed',
+            'mean_q': 'fixed',
+            'gamma_q': 'fixed',
+            'var_q':'fixed',
+            'beta':'fixed',
+            'var_x':'fixed',
+            'var_g':'fixed',
+            'var_dx':'fixed',
+            'var_dg':'fixed'} 
+
+# ============== READING ============== #
+def read_params_config(filename):
+    df = pd.read_csv(filename, nrows=11)
+    return df
+
+def get_params_config(df, param):
+    return df.loc[df['name'] == param]
+    
+def read_1dscan(filename, l='log_likelihood'):
+    tag = "scan_"
+    base = filename.split("/")[-1]
+    parameter = base[base.find(tag)+len(tag):-4]
+
+    df = pd.read_csv(filename, skiprows=14)    
+    return df[[parameter, l]], parameter
+
+def read_iteration_process(filename):
+    df = pd.read_csv(filename, skiprows=14)    
+    return df[["iteration", 'log_likelihood']]
+
+def read_correlation(filename, n=12):
+    return pd.read_csv(filename, skiprows=n)
+
+def read_minimization(filename, last_n=0):
+    df = pd.read_csv(filename, skiprows=14)    
+    if last_n != 0:
+        return df.iloc[[-last_n]]
+    return df
+
+# ============== PLOTTING ============== #
+# some basic plots for a ggp run
+def plot_1dscans(filenames, plot_file=None, cols=3, width=14, l_col='log_likelihood'):
+    """ plots the scan for all filenames as a grid """
+    rows = np.ceil(len(filenames)/cols).astype(int)
+    _, axes = plt.subplots(rows, cols, figsize=(width,0.7*width/cols*rows))
+    # fig = plt.figure()
+    for i, ax in enumerate(axes.ravel()):
+        if i<len(filenames):
+            scan, parameter = read_1dscan(filenames[i], l_col)
+
+            param_range = scan.to_numpy()[:,0]
+            ll = scan.to_numpy()[:,1]
+
+            ax.plot(param_range,ll, label='scan')
+
+            params_config = read_params_config(filenames[i])
+            init = get_params_config(params_config, parameter)["init"].values[0]
+            init_idx = np.searchsorted(param_range, init)
+            ax.axvline(x=init, label='init', ls='--', color='tab:orange')
+            ax.axhline(y=ll[init_idx], ls='--', color='tab:orange')
+
+            x_scan_max, y_scan_max = param_range[np.nanargmax(ll)], np.nanmax(ll)
+
+            ax.axvline(x=x_scan_max, label='ll max', ls='--', color='tab:green')
+            ax.axhline(y=y_scan_max, ls='--', color='tab:green')
+
+            ax.set_xlabel(parameter)
+            ax.set_ylabel('log likelihood')
+            ax.ticklabel_format(style='sci', scilimits=(0,1), useOffset=False)
+            ax.legend()
+        else:
+            plt.delaxes(ax)
+    plt.tight_layout()
+    if plot_file != None:
+        plt.savefig(plot_file + '_1dscans.pdf')
+    plt.show()
+
+
+def plot_minimization(filenames, plot_file=None, labels=None, log=None):
+    """ plots log likelihood vs number of iterations, needs iterations file """
+    _, ax = plt.subplots(figsize=(10,7))
+    for i, filename in enumerate(filenames):
+        mini_data = read_iteration_process(filename)
+        iterations = mini_data.to_numpy()[:,0].astype(int)
+        ll = mini_data.to_numpy()[:,1]
+        ax.plot(iterations, ll)
+        if labels != None:
+            label = labels[i]+", iteration: {:d}, log likelihood: {:.2f}".format(iterations[-1], ll[-1])
+        else:
+            label = "iteration: {:d}, log likelihood: {:.2f}".format(iterations[-1], ll[-1])
+        ax.scatter(iterations[-1], ll[-1], label=label)
+    
+    ax.legend()
+    ax.set_xlabel("iterations")
+    ax.set_ylabel("log likelihood")
+    if log == 'x':
+        plt.xscale('log')
+    if log == True:
+        plt.xscale('log')
+        plt.yscale('log')
+
+    if plot_file != None:
+        plt.savefig(plot_file + '_minimization.pdf')
+    plt.show()
+
+
+
+def plot_errors(filename, plot_file=None):
+    """ plot errors for all epsilons of the hessian matrix given in file, needs final file """
+
+    final_params = pd.read_csv(filename, nrows=11)['final']
+    errors_df = pd.read_csv(filename, skiprows=14)
+
+    mpl.style.use('default')
+    # mpl.style.use('seaborn')
+
+    fig, ax = plt.subplots(figsize=(7,5))
+    for i, para in enumerate(errors_df.columns[1:]):
+        ax.set_xlabel('relative $h_r= h / \\theta_i$ ')
+        ax.set_ylabel('relative error')
+
+        ax.scatter(errors_df['epsilon'].astype(str), errors_df[para]/final_params[i], label=para)
+        ax.plot(errors_df['epsilon'].astype(str), errors_df[para]/final_params[i])
+
+    fig.legend(bbox_to_anchor=[1, 0.5], loc=10)
+    if plot_file != None:
+        plt.savefig(plot_file + '_errors.pdf')
+    plt.show()  
+
+
+
+def compare_init_final(filename, plot_file=None, except_param=[]):
+    """ bar plot of relative deviation between init and final parameter value, needs final file  """
+    init = read_params_config(filename)[["name", "init"]]
+    init = init.set_index("name")
+
+    minimized = read_minimization(filename, 1).transpose()
+    reldev = [(init.loc[key].values[0]-minimized.loc[key].values[0])/init.loc[key].values[0] if init.loc[key].values[0]!=0 and key not in except_param else None for key in init.index]
+
+    # Table
+    comparison = pd.DataFrame({'parameter': init.index, 
+                                'simulation': [init.loc[key].values[0] for key in init.index],
+                                'minimization': [minimized.loc[key].values[0] for key in init.index],
+                                'relative deviation': reldev})
+
+    # plot
+    colors = ['tab:orange' if 1 else 'tab:blue' for key in init.index]
+    _, ax = plt.subplots(figsize=(7,5))
+    plt.title(r"Relative deviation to initial value $(\Theta_i - \Theta_{i, opt})/\Theta_i $")
+
+    reldev = [ri for ri in reldev if ri != None]
+    x = np.arange(len(reldev))
+    ax.bar(x, reldev, color=colors)
+
+    for i, r in enumerate(reldev):
+        if r<0:
+            ax.text(x[i] -0.3, r -0.03 , "{:.3f}".format(r), va='center')
+        else:
+            ax.text(x[i] -0.3, r +0.03 , "{:.3f}".format(r), va='center')
+
+    xticks = [key for key in init.index if key not in except_param]
+
+    plt.xticks(np.arange(len(reldev)), xticks, rotation=45)
+    # custom_legend = [Patch(facecolor='tab:orange', label='variances'),
+    #                 Patch(facecolor='tab:blue', label='others')]
+    # ax.legend(handles=custom_legend, bbox_to_anchor=(1,1), loc="upper left")
+    ax.set_ylim([-1,1 ])
+
+    plt.tight_layout()
+    if plot_file != None:
+        plt.savefig(plot_file + '_estim_params.pdf')
+
+    plt.show()
+    return comparison
+        
+
+# ==================================================== #
+# ==================================================== #
+# "Advanced" analysis
+def plot_noisy_param_run(filenames, params_config, skip=0, cols=3, width=14):
+    """ needs list of final files """
+    no_params = len(params_config)
+    rows = np.ceil(no_params/cols).astype(int)
+    _, axes = plt.subplots(rows, cols, figsize=(width,0.7*width/cols*rows))
+    ax = axes.ravel()
+    for i, k in enumerate(params_config.items()):
+        n = 0
+        for minimization_final_file in filenames:
+            if os.path.isfile(minimization_final_file):
+                parameters_settings = read_params_config(minimization_final_file)
+                final = get_params_config(parameters_settings, k[0])["final"].values[0]
+                init = get_params_config(parameters_settings, k[0])["init"].values[0]
+
+                err_bar = float(pd.read_csv(minimization_final_file, skiprows=14)[k[0]].iloc[2])
+                ax[i].errorbar(n, final, yerr=err_bar, color='tab:blue',  fmt='o', ms=3, 
+                            label="deviation prediction")
+
+                # ax[i].scatter(n, final, color="tab:blue")
+                ax[i].scatter(n, init, color="tab:orange")
+            else:
+                print(minimization_final_file, "not found!")
+            n += 1
+
+        # ax[i].ticklabel_format(style='sci', scilimits=(0,1), useOffset=False)
+        ax[i].set_ylabel(k[0])
+        ax[i].set_xlabel("run")
+
+    for i in range(len(params_config), len(ax)):
+        plt.delaxes(ax[i])
+    plt.tight_layout()
+
+    plt.show()
+
+
+
+# ==================================================== #
+# Prediction #
+# ==================================================== #
+def plot_predictions(filename, 
+                     start=None, stop=None, step=None, 
+                     n_random_cells=None,
+                     time_unit=("min", 60), 
+                     skip_row=13, 
+                     xlim=[None, None], 
+                     outfile=None, 
+                     show=True, 
+                     color_scheme="tab"):
+    
+    """ needs a prediction file, start, stop, step refers to cells """
+    fig, axes = plt.subplots(4, 1, figsize=(8,10), sharex=True)
+    ax = axes.ravel()
+
+    for a in ax:
+        a.spines["top"].set_visible(False)
+        a.spines["right"].set_visible(False)
+
+        a.spines['right'].set_color('none')
+        a.yaxis.tick_left()
+
+        a.spines['top'].set_color('none')
+        a.xaxis.tick_bottom()
+        
+    data = pd.read_csv(filename, skiprows=skip_row)
+    all_cells = df2ggp_cells(data)
+
+    if n_random_cells != None:
+        cells_data = np.random.choice(all_cells, size=n_random_cells, replace=False)
+    else:
+        cells_data = all_cells[start: stop: step]
+     
+
+    norm = mpl.colors.Normalize(vmin=-len(cells_data)/2, vmax=len(cells_data))
+    if len(cells_data)==1:
+        norm = mpl.colors.Normalize(vmin=-10*len(cells_data), vmax=len(cells_data))
+
+    cmap_data = mpl.cm.ScalarMappable(cmap='Oranges', norm=norm)
+    cmap_data.set_array([])
+
+    cmap_prediction = mpl.cm.ScalarMappable(cmap='Blues', norm=norm)
+    cmap_prediction.set_array([])
+    colors= ['tab:blue',
+            'tab:orange',
+            'tab:green',
+            'tab:red',
+            'tab:purple',
+            'tab:brown',
+            'tab:pink',
+            'tab:gray',
+            'tab:olive',
+            'tab:cyan']*int(len(cells_data)/10+1)
+
+    s = 0.5
+    lw = 0.7
+    for i, cell in enumerate(cells_data):
+        if color_scheme=="tab":
+            data_color =colors[i]
+            prediction_color =colors[i]
+        else:
+            data_color = cmap_data.to_rgba(i)
+            prediction_color = cmap_prediction.to_rgba(i)
+
+        time = np.array(cell.time) / time_unit[1]
+
+        ax[0].scatter(time, cell.log_length, color=data_color, s=s)
+        ax[0].plot(time, cell.mean_x, color=prediction_color, lw=lw)
+        ax[0].fill_between(time, cell.mean_x-np.sqrt(cell.cov_xx), cell.mean_x+np.sqrt(cell.cov_xx), 
+                    color=prediction_color, alpha=0.2)
+
+        ax[1].scatter(time, cell.gfp, color=data_color, s=s)
+        ax[1].plot(time, cell.mean_g, color=prediction_color, lw=lw)
+        ax[1].fill_between(time, cell.mean_g-np.sqrt(cell.cov_gg), cell.mean_g+np.sqrt(cell.cov_gg), 
+                    color=prediction_color, alpha=0.2)
+        
+        ax[2].plot(time, cell.mean_l*time_unit[1], color=prediction_color, lw=lw)
+        ax[2].fill_between(time, 
+                           (cell.mean_l-np.sqrt(cell.cov_ll))*time_unit[1], 
+                           (cell.mean_l+np.sqrt(cell.cov_ll))*time_unit[1], 
+                            color=prediction_color, alpha=0.2)
+
+        ax[3].plot(time, cell.mean_q*time_unit[1], color=prediction_color, lw=lw)
+        ax[3].fill_between(time, 
+                           (cell.mean_q-np.sqrt(cell.cov_qq))*time_unit[1], 
+                           (cell.mean_q+np.sqrt(cell.cov_qq))*time_unit[1], 
+                            color=prediction_color, alpha=0.2)
+
+    ax[0].set_ylabel("log cell size")   
+    ax[1].set_ylabel("total GFP")   
+    ax[2].set_ylabel(r"growth rate $\lambda$")   
+    ax[3].set_ylabel(r"production rate $q$")   
+
+
+    ax[3].set_xlabel("time ({:s})".format(time_unit[0]))  
+
+    for i in range(4):
+        ax[i].set_xlim(xlim)
+        
+    plt.tight_layout()
+
+    if outfile != None:
+        fig.savefig(outfile, dpi=300)
+    elif show:
+        plt.show()
+    fig.clear()
+    plt.close(fig)
+    return ax
+
+# ==================================================== #
+
+           
+def plot_raw_data_input_file(filename,
+                            time="time", 
+                            length="length", 
+                            gfp="fp", 
+                            cell_id="cell_id", 
+                            start=None, stop=None, step=None, 
+                            n_random_cells=None,
+                            time_unit=("min", 60), 
+                            skip_row=0, 
+                            scatter=True, 
+                            outfile=None, 
+                            color_scheme="tab"):
+    
+    """ needs a prediction file, start, stop, step refers to cells """
+    fig, axes = plt.subplots(2, 1, figsize=(8,5), sharex=True)
+    ax = axes.ravel()
+
+    for a in ax:
+        a.spines["top"].set_visible(False)
+        a.spines["right"].set_visible(False)
+
+        a.spines['right'].set_color('none')
+        a.yaxis.tick_left()
+
+        a.spines['top'].set_color('none')
+        a.xaxis.tick_bottom()
+        
+        
+    data = pd.read_csv(filename, skiprows=skip_row)
+    all_cells = df2raw_cells(  data, 
+                                time=time, 
+                                length=length, 
+                                gfp=gfp, 
+                                cell_id=cell_id, 
+                                parent_id=None)
+
+    if n_random_cells != None:
+        cells_data = np.random.choice(all_cells, size=n_random_cells, replace=False)
+    else:
+        cells_data = all_cells[start: stop: step]
+        
+    norm = mpl.colors.Normalize(vmin=-len(cells_data)/2, vmax=len(cells_data))
+    if len(cells_data)==1:
+        norm = mpl.colors.Normalize(vmin=-10*len(cells_data), vmax=len(cells_data))
+    cmap_data = mpl.cm.ScalarMappable(cmap='Oranges', norm=norm)
+    cmap_data.set_array([])
+
+    cmap_prediction = mpl.cm.ScalarMappable(cmap='Blues', norm=norm)
+    cmap_prediction.set_array([])
+
+    colors= ['tab:blue',
+        'tab:orange',
+        'tab:green',
+        'tab:red',
+        'tab:purple',
+        'tab:brown',
+        'tab:pink',
+        'tab:gray',
+        'tab:olive',
+        'tab:cyan']*int(len(cells_data)/10+1)
+        
+    for i, cell in enumerate(cells_data):
+        time = np.array(cell.time) / time_unit[1]
+        if color_scheme=="tab":
+            data_color =colors[i]
+        else:
+            data_color = cmap_data.to_rgba(i)
+
+        if scatter:
+            ax[0].scatter(time, cell.length, color=data_color, s=10)
+            ax[1].scatter(time, cell.gfp, color=data_color, s=10)
+        else:
+            ax[0].plot(time, cell.length, color=data_color, lw=0.2)
+            ax[1].plot(time, cell.gfp, color=data_color, lw=0.2)
+
+    ax[0].set_ylabel("cell size")   
+    ax[1].set_ylabel("total GFP")   
+
+    ax[1].set_xlabel("time ({:s})".format(time_unit[0]))  
+
+    plt.tight_layout()
+
+    if outfile != None:
+        fig.savefig(outfile, dpi=300)
+        plt.close()
+    else:
+        plt.show()
+
+        
+        
+        
+def plot_raw_concentration_input_file(filename,
+                            time="time", 
+                            length="length", 
+                            gfp="fp", 
+                            cell_id="cell_id", 
+                            start=None, stop=None, step=None, 
+                            n_random_cells=None,
+                            time_unit=("min", 60), 
+                            skip_row=0, 
+                            scatter=True, 
+                            outfile=None, 
+                            color_scheme="tab"):
+    
+    """ needs a prediction file, start, stop, step refers to cells """
+    fig, axes = plt.subplots(4, 1, figsize=(8,10), sharex=True)
+    ax = axes.ravel()
+
+    for a in ax:
+        a.spines["top"].set_visible(False)
+        a.spines["right"].set_visible(False)
+
+        a.spines['right'].set_color('none')
+        a.yaxis.tick_left()
+
+        a.spines['top'].set_color('none')
+        a.xaxis.tick_bottom()
+        
+        
+    data = pd.read_csv(filename, skiprows=skip_row)
+    all_cells = df2raw_cells(  data, 
+                                time=time, 
+                                length=length, 
+                                gfp=gfp, 
+                                cell_id=cell_id, 
+                                parent_id=None)
+
+    if n_random_cells != None:
+        cells_data = np.random.choice(all_cells, size=n_random_cells, replace=False)
+    else:
+        cells_data = all_cells[start: stop: step]
+        
+    norm = mpl.colors.Normalize(vmin=-len(cells_data)/2, vmax=len(cells_data))
+    if len(cells_data)==1:
+        norm = mpl.colors.Normalize(vmin=-10*len(cells_data), vmax=len(cells_data))
+    cmap_data = mpl.cm.ScalarMappable(cmap='Oranges', norm=norm)
+    cmap_data.set_array([])
+
+    cmap_prediction = mpl.cm.ScalarMappable(cmap='Blues', norm=norm)
+    cmap_prediction.set_array([])
+
+    colors= ['tab:blue',
+        'tab:orange',
+        'tab:green',
+        'tab:red',
+        'tab:purple',
+        'tab:brown',
+        'tab:pink',
+        'tab:gray',
+        'tab:olive',
+        'tab:cyan']*int(len(cells_data)/10+1)
+        
+    for i, cell in enumerate(cells_data):
+        time = np.array(cell.time) / time_unit[1]
+        if color_scheme=="tab":
+            data_color =colors[i]
+        else:
+            data_color = cmap_data.to_rgba(i)
+        cells_data[i].c = np.array(cell.gfp)/np.array(cell.length)
+        
+        ax[0].plot(time, cell.length, color=data_color, lw=1)
+        ax[1].plot(time, cell.gfp, color=data_color, lw=1)
+            
+        ax[2].plot(time, cells_data[i].c , color=data_color, lw=1)
+        
+    times = np.concatenate([np.array(cell.time) / time_unit[1] for cell in all_cells])
+    conce = np.concatenate([np.array(cell.gfp)/np.array(cell.length) for cell in all_cells])
+    
+    bins_time = np.unique(times)
+
+    bin_mean, bin_edges,_ = stats.binned_statistic(times,conce, statistic='mean', bins=bins_time)
+    bin_std , _        , _= stats.binned_statistic(times,conce, statistic='std', bins=bins_time)
+    
+    ax[3].plot(bin_edges[:-1]+np.diff(bin_edges)/2., bin_mean, color="black", lw=2)
+    ax[3].fill_between(bin_edges[:-1]+np.diff(bin_edges)/2., 
+                       bin_mean - bin_std, 
+                       bin_mean + bin_std, 
+                       color="black", alpha=0.4)
+    
+    ax[0].set_ylabel("cell size")   
+    ax[1].set_ylabel("total GFP")   
+    ax[2].set_ylabel("[GFP]")   
+    ax[3].set_ylabel("[GFP] (mean and s.d.)")   
+    
+    ax[3].set_ylim(ax[2].get_ylim())
+
+    ax[3].set_xlabel("time ({:s})".format(time_unit[0]))  
+
+    plt.tight_layout()
+
+    if outfile != None:
+        fig.savefig(outfile, dpi=300)
+        plt.close()
+    else:
+        plt.show()
