@@ -31,9 +31,9 @@ division_addition = np.log(2)       # for adder: divsion, when division_addition
 const_q =True
 
 if const_q:
-    out_dir = mk_missing_dir('../../data_sim_manuscript/vary_cv_gamma_n{:d}_{:s}_const_q'.format(n_cells*lanes, div_mode))
+    out_dir = mk_missing_dir('../../fluctuations_paper_data/simulations/vary_cv_gamma_n{:d}_{:s}_const_q'.format(n_cells*lanes, div_mode))
 else:
-    out_dir = mk_missing_dir('../../data_sim_manuscript/vary_cv_gamma_n{:d}_{:s}_noise_q'.format(n_cells*lanes, div_mode))
+    out_dir = mk_missing_dir('../../fluctuations_paper_data/simulations/vary_cv_gamma_n{:d}_{:s}_noise_q'.format(n_cells*lanes, div_mode))
     
 for norm_tau2 in np.arange(0.1, 0.8, 0.1):
     for cv in np.arange(0.1, 0.8, 0.1):
